@@ -1,16 +1,23 @@
 import crypt
 import argparse
 import os
+import threading
 
 
-def run_crack(passFile, dictionary):
+
+def run_crack(passFile, dictionary,semaphore):
+	lock = threading.Lock()
 	for line in passFile:
 		user,hashed = line.split(':')[0:2]
 		if hashed[0] == '$':
-			print "Testing password for %s"%user
-			run_test(hashed,dictionary)
+			if not semaphore:
+				password = run_test(user,hashed,dictionary)
+			else:
+				semaphore.acquire()
+				t = threading.Thread(target=run_test, args=(user,hashed,dictionary))  
+				t.start()
 
-def run_test(hashed,dictionary):
+def run_test(user,hashed,dictionary):
 	dictFile = open(dictionary,"r")
 	algorithm, salt = hashed.split("$")[1:3]
 	completed_salt = "${}${}".format(algorithm, salt)
@@ -18,14 +25,24 @@ def run_test(hashed,dictionary):
 	for password in dictFile.readlines():
 		password = password.strip()
 		if crypt.crypt(password,completed_salt) == hashed:
-			print "Password found..%s" % password
-			return
-	print "Password not found.."
+			lock.acquire()
+			print "Pasword found.. %s:%s" % (user,password)
+			lock.release()
+			dictFile.close()
+			semaphore.release()
+			return 
+	lock.acquire()
+	print "Password not found for user: %s" % user
+	lock.release()
+	dictFile.close()
+	semaphore.release()
+	return 
 
 
 if __name__ == '__main__':
 	parser = argparse.ArgumentParser()
 	parser.add_argument('-p',metavar="SHADOW FILE",type = str, default ="/etc/shadow",help = "The file with accounts (shadow format)")
+	parser.add_argument('-t',metavar="THREADS NUMBER",type = int, default =0,help = "The number of threads to accelerate the process")
 	parser.add_argument('-d',metavar="DICTIONARY",type = str, required = True,help = "The dictionary file containing passwords")
 	parser.add_argument('-v','--version', action = 'version', version = '1.0')
 	args = parser.parse_args()
@@ -44,7 +61,11 @@ if __name__ == '__main__':
 
 	if not os.path.isfile(args.d):
 		exit("Dictionary file does not exist or is invalid..")
-	
+	if args.t > 1:
+		semaphore = threading.BoundedSemaphore(value=args.t)
+	else:
+		semaphore =  None 
+	run_crack(passFile, args.d, semaphore)
+			
 
-	run_crack(passFile, args.d)
 	passFile.close()
